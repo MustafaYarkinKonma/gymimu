@@ -1,0 +1,183 @@
+Claude
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Index · HTML
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GymIMU Recorder</title>
+<style>
+  body { font-family: sans-serif; margin: 16px; }
+  button { font-size: 18px; padding: 10px 16px; margin: 4px 4px 4px 0; }
+  #status { margin: 10px 0; font-size: 18px; }
+  canvas { width: 100%; height: 240px; border: 1px solid #888; }
+  .legend span { margin-right: 14px; font-weight: bold; }
+</style>
+</head>
+<body>
+<button id="connect">Connect</button>
+<button id="start" disabled>Start</button>
+<button id="stop" disabled>Stop</button>
+<button id="fetch" disabled>Fetch</button>
+<button id="save" disabled>Download CSV</button>
+<div id="status">Not connected</div>
+<canvas id="plot" width="1000" height="400"></canvas>
+<div class="legend">
+  <span style="color:#d33">X</span>
+  <span style="color:#2a2">Y</span>
+  <span style="color:#36c">Z</span>
+  (full height = &plusmn;2 g)
+</div>
+ 
+<script>
+const SERVICE = '7b1e0001-5d2a-4c3b-9f10-a1b2c3d4e5f6';
+const DATA    = '7b1e0002-5d2a-4c3b-9f10-a1b2c3d4e5f6';
+const CTRL    = '7b1e0003-5d2a-4c3b-9f10-a1b2c3d4e5f6';
+const RATE = 100;          // samples per second, set in the firmware
+const LSB_PER_G = 8192;    // +-4 g range, set in the firmware
+ 
+const $ = id => document.getElementById(id);
+const say = t => $('status').textContent = t;
+ 
+let ctrl = null;
+let rows = [];
+let expected = 0;
+ 
+const send = c => ctrl.writeValue(new TextEncoder().encode(c));
+ 
+function onData(e) {
+  const v = e.target.value;
+ 
+  // header packet: AA 55 + sample count
+  if (v.byteLength === 4 && v.getUint8(0) === 0xAA && v.getUint8(1) === 0x55) {
+    expected = v.getUint16(2, true);
+    rows = [];
+    $('save').disabled = true;
+    say(expected ? `Receiving 0 / ${expected}` : 'The recording is empty');
+    return;
+  }
+ 
+  // data packet: 6 bytes per sample
+  for (let i = 0; i + 6 <= v.byteLength; i += 6) {
+    rows.push([
+      v.getInt16(i, true) / LSB_PER_G,
+      v.getInt16(i + 2, true) / LSB_PER_G,
+      v.getInt16(i + 4, true) / LSB_PER_G
+    ]);
+  }
+  say(`Receiving ${rows.length} / ${expected}`);
+ 
+  if (rows.length >= expected) {
+    say(`Got ${rows.length} samples (${(rows.length / RATE).toFixed(1)} s)`);
+    draw();
+    $('save').disabled = false;
+  }
+}
+ 
+function draw() {
+  const c = $('plot'), g = c.getContext('2d');
+  const W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = '#ccc';
+  g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+ 
+  const colors = ['#d33', '#2a2', '#36c'];
+  const last = Math.max(1, rows.length - 1);
+  for (let a = 0; a < 3; a++) {
+    g.strokeStyle = colors[a];
+    g.beginPath();
+    rows.forEach((r, i) => {
+      const x = i / last * W;
+      const y = H / 2 - (r[a] / 2) * (H / 2);
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    });
+    g.stroke();
+  }
+}
+ 
+$('connect').onclick = async () => {
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [SERVICE] }]
+    });
+    dev.addEventListener('gattserverdisconnected', () => {
+      say('Disconnected. Press Connect to reconnect.');
+      ['start', 'stop', 'fetch'].forEach(id => $(id).disabled = true);
+    });
+    say('Connecting...');
+    const srv = await dev.gatt.connect();
+    const svc = await srv.getPrimaryService(SERVICE);
+    ctrl = await svc.getCharacteristic(CTRL);
+    const data = await svc.getCharacteristic(DATA);
+    data.addEventListener('characteristicvaluechanged', onData);
+    await data.startNotifications();
+    ['start', 'stop', 'fetch'].forEach(id => $(id).disabled = false);
+    say('Connected');
+  } catch (err) {
+    say('Error: ' + err.message);
+  }
+};
+ 
+$('start').onclick = async () => {
+  try { await send('S'); say('Recording...'); }
+  catch (err) { say('Error: ' + err.message); }
+};
+ 
+$('stop').onclick = async () => {
+  try { await send('X'); say('Stopped. Press Fetch to get the data.'); }
+  catch (err) { say('Error: ' + err.message); }
+};
+ 
+$('fetch').onclick = async () => {
+  try { await send('F'); }
+  catch (err) { say('Error: ' + err.message); }
+};
+ 
+$('save').onclick = () => {
+  const lines = rows.map((r, i) =>
+    [(i / RATE).toFixed(2), ...r.map(v => v.toFixed(4))].join(','));
+  const csv = 't,ax,ay,az\n' + lines.join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'set_' + new Date().toISOString().replace(/[:.]/g, '-') + '.csv';
+  a.click();
+};
+</script>
+</body>
+</html>
+ 
+Claude finished the response
